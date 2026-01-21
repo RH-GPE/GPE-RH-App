@@ -8,7 +8,7 @@ import time
 # Configuration de la page
 st.set_page_config(page_title="GPE - RH - Registre", layout="wide")
 
-# --- GESTION CONNEXION ---
+# --- GESTION CONNEXION CORRIGÉE (VERSION FINALE) ---
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -22,23 +22,37 @@ def check_password():
     with c2:
         user = st.text_input("Identifiant")
         pwd = st.text_input("Mot de passe", type="password")
+        
         if st.button("Se connecter", type="primary"):
+            # 1. On récupère les secrets (séparément pour éviter le bug)
             try:
                 users_db = st.secrets["credentials"]
-                if user in users_db and users_db[user] == pwd:
-                    st.session_state.authenticated = True
-                    st.session_state.username = user
-                    # On logue la connexion
-                    log_action(user, "Connexion", "Succès") 
-                    st.success(f"Bonjour {user} !")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("Erreur d'identification.")
-            except:
-                st.error("Erreur config Secrets.")
-    return False
+            except Exception:
+                st.error("❌ Erreur : Section [credentials] introuvable dans les Secrets.")
+                return False
 
+            # 2. Vérification du mot de passe
+            if user in users_db and users_db[user] == pwd:
+                st.session_state.authenticated = True
+                st.session_state.username = user
+                
+                # 3. Logging (isolé pour ne pas bloquer)
+                try:
+                    log_action(user, "Connexion", "Succès") 
+                except Exception as e:
+                    print(f"Log échoué: {e}") # On continue même si le log rate
+                
+                st.success(f"Bonjour {user} !")
+                time.sleep(1)
+                
+                # 4. LE RERUN EST MAINTENANT HORS DE TOUT BLOC 'TRY'
+                st.rerun()
+                
+            else:
+                st.error("Identifiant ou mot de passe incorrect.")
+                
+    return False
+    
 # --- FONCTION DE LOGGING (NOUVEAU) ---
 def log_action(utilisateur, action, details):
     """Écrit une ligne dans l'onglet 'Logs' du Google Sheet."""
@@ -223,6 +237,7 @@ with tab4:
             st.info("Le journal est vide pour l'instant.")
     except Exception as e:
         st.error("Impossible de lire l'onglet 'Logs'. Avez-vous bien créé l'onglet dans Google Sheets ?")
+
 
 
 
