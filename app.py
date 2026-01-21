@@ -1,201 +1,228 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import datetime, date
 from io import BytesIO
 from streamlit_gsheets import GSheetsConnection
 import time
 
 # Configuration de la page
-st.set_page_config(page_title="Registre - GPE - RH", layout="wide")
+st.set_page_config(page_title="GPE - RH - Registre", layout="wide")
 
-# --- GESTION DE LA CONNEXION (MULTI-UTILISATEURS) ---
+# --- GESTION CONNEXION ---
 def check_password():
-    """Gère la connexion avec plusieurs utilisateurs."""
-    
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-        st.session_state.username = "" # Pour savoir QUI est connecté
+        st.session_state.username = ""
 
     if st.session_state.authenticated:
         return True
 
-    # Écran de connexion
     st.title("🔒 Connexion GPE")
-    st.caption("Accès réservé au personnel autorisé.")
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        username_input = st.text_input("Identifiant")
-        password_input = st.text_input("Mot de passe", type="password")
-        
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        user = st.text_input("Identifiant")
+        pwd = st.text_input("Mot de passe", type="password")
         if st.button("Se connecter", type="primary"):
             try:
-                # On charge la liste des utilisateurs depuis les Secrets
-                # secrets["credentials"] est maintenant un dictionnaire {user: password, user2: pass2}
                 users_db = st.secrets["credentials"]
-                
-                # 1. On vérifie si l'utilisateur existe dans la liste
-                if username_input in users_db:
-                    # 2. On vérifie si le mot de passe correspond
-                    if users_db[username_input] == password_input:
-                        st.session_state.authenticated = True
-                        st.session_state.username = username_input # On mémorise le nom
-                        st.success(f"Bienvenue, {username_input} !")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Mot de passe incorrect.")
+                if user in users_db and users_db[user] == pwd:
+                    st.session_state.authenticated = True
+                    st.session_state.username = user
+                    # On logue la connexion
+                    log_action(user, "Connexion", "Succès") 
+                    st.success(f"Bonjour {user} !")
+                    time.sleep(1)
+                    st.rerun()
                 else:
-                    st.error("Identifiant inconnu.")
-                    
-            except Exception as e:
-                st.error("Erreur de configuration des Secrets. Vérifiez la section [credentials].")
-                
+                    st.error("Erreur d'identification.")
+            except:
+                st.error("Erreur config Secrets.")
     return False
 
-# --- SÉCURITÉ : STOP SI PAS CONNECTÉ ---
+# --- FONCTION DE LOGGING (NOUVEAU) ---
+def log_action(utilisateur, action, details):
+    """Écrit une ligne dans l'onglet 'Logs' du Google Sheet."""
+    try:
+        # Connexion dédiée pour éviter les conflits
+        conn_log = st.connection("gsheets", type=GSheetsConnection)
+        
+        # On essaie de lire les logs existants
+        try:
+            df_logs = conn_log.read(worksheet="Logs", ttl=0)
+        except:
+            df_logs = pd.DataFrame(columns=["Date", "Heure", "Utilisateur", "Action", "Détails"])
+        
+        # Création de la nouvelle ligne
+        now = datetime.now()
+        new_log = pd.DataFrame([{
+            "Date": now.strftime("%Y-%m-%d"),
+            "Heure": now.strftime("%H:%M:%S"),
+            "Utilisateur": utilisateur,
+            "Action": action,
+            "Détails": details
+        }])
+        
+        # Concaténation et sauvegarde
+        # On gère le cas où le fichier est vide
+        if df_logs.empty:
+            df_final = new_log
+        else:
+            df_final = pd.concat([df_logs, new_log], ignore_index=True)
+            
+        conn_log.update(worksheet="Logs", data=df_final)
+        
+    except Exception as e:
+        print(f"Erreur de log : {e}") # On affiche juste dans la console, on ne bloque pas l'app
+
 if not check_password():
     st.stop()
 
-
-# =========================================================
-# APPLICATION PRINCIPALE (Visible uniquement après login)
-# =========================================================
-
-# --- CONNEXION GOOGLE SHEETS ---
+# --- APP PRINCIPALE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
         df = conn.read(worksheet="Sheet1", ttl=0)
-        expected_cols = [
-            "Nom", "Prénom", "Poste", "Naissance", "Téléphone", 
-            "Date Embauche", "Statut", "Salaire", "Contrat", "Etat", "Date Sortie"
-        ]
-        
-        if df.empty: return pd.DataFrame(columns=expected_cols)
-        
-        for col in expected_cols:
-            if col not in df.columns: df[col] = None
-        
-        return df.fillna("")[expected_cols]
-    except Exception as e:
-        st.error(f"Erreur Google Sheets : {e}")
-        return pd.DataFrame()
+        cols = ["Nom", "Prénom", "Poste", "Naissance", "Téléphone", "Date Embauche", "Statut", "Salaire", "Contrat", "Etat", "Date Sortie"]
+        if df.empty: return pd.DataFrame(columns=cols)
+        for c in cols: 
+            if c not in df.columns: df[c] = None
+        return df.fillna("")[cols]
+    except: return pd.DataFrame()
 
 def save_data(df):
-    try:
-        conn.update(worksheet="Sheet1", data=df)
-        st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Erreur sauvegarde : {e}")
+    conn.update(worksheet="Sheet1", data=df)
+    st.cache_data.clear()
 
-# --- BARRE LATÉRALE ---
+# --- SIDEBAR ---
 with st.sidebar:
-    # Affiche le nom de la personne connectée
-    st.info(f"👤 Utilisateur : **{st.session_state.username.capitalize()}**")
-    
+    current_user = st.session_state.username
+    st.info(f"👤 **{current_user.capitalize()}**")
     if st.button("Se déconnecter"):
+        log_action(current_user, "Déconnexion", "Fin de session")
         st.session_state.authenticated = False
-        st.session_state.username = ""
         st.rerun()
 
-# --- CONTENU ---
-st.title(f"☁️ GPE - Espace RH")
+st.title("☁️ GPE - Gestion RH")
 st.markdown("---")
 
 df = load_data()
-
 if not df.empty:
     df_actifs = df[df['Etat'] != 'Parti'].copy()
     df_anciens = df[df['Etat'] == 'Parti'].copy()
 else:
     df_actifs, df_anciens = pd.DataFrame(), pd.DataFrame()
 
-tab1, tab2, tab3 = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives"])
+# 4 ONGLETS MAINTENANT
+tab1, tab2, tab3, tab4 = st.tabs(["➕ Recrutement", "👥 Actifs", "🗂️ Archives", "📜 Journal (Logs)"])
 
-# TAB 1
+# TAB 1 : AJOUT
 with tab1:
-    st.header("Nouvelle Embauche")
-    with st.form("add_form", clear_on_submit=True):
+    with st.form("add"):
         c1, c2 = st.columns(2)
         with c1:
             nom = st.text_input("Nom")
             prenom = st.text_input("Prénom")
             poste = st.text_input("Poste")
-            naissance = st.date_input("Naissance", min_value=date(1960, 1, 1))
+            naissance = st.date_input("Naissance", date(1980,1,1))
         with c2:
-            tel = st.text_input("Téléphone")
-            embauche = st.date_input("Date Embauche")
+            tel = st.text_input("Tél")
+            embauche = st.date_input("Embauche")
             statut = st.radio("Statut", ["Non-cadre", "Cadre"], horizontal=True)
             salaire = st.number_input("Salaire", step=100.0)
-        contrat_recu = st.checkbox("Contrat signé et archivé")
+        contrat = st.checkbox("Contrat OK")
         
         if st.form_submit_button("Valider"):
             if nom and prenom:
-                new_entry = pd.DataFrame([{
-                    "Nom": nom.upper(), "Prénom": prenom.capitalize(), "Poste": poste.capitalize(),
-                    "Naissance": str(naissance), "Téléphone": str(tel), "Date Embauche": str(embauche),
-                    "Statut": statut, "Salaire": salaire, "Contrat": "Oui" if contrat_recu else "Non",
+                new = pd.DataFrame([{
+                    "Nom": nom.upper(), "Prénom": prenom.capitalize(), "Poste": poste,
+                    "Naissance": str(naissance), "Téléphone": tel, "Date Embauche": str(embauche),
+                    "Statut": statut, "Salaire": salaire, "Contrat": "Oui" if contrat else "Non",
                     "Etat": "Actif", "Date Sortie": ""
                 }])
-                save_data(pd.concat([df, new_entry], ignore_index=True))
+                save_data(pd.concat([df, new], ignore_index=True))
+                
+                # LOG
+                log_action(current_user, "Recrutement", f"Ajout de {prenom} {nom}")
+                
                 st.success("Ajouté !")
                 st.rerun()
-            else:
-                st.warning("Nom/Prénom requis.")
 
-# TAB 2
+# TAB 2 : ACTIFS
 with tab2:
     if not df_actifs.empty:
-        edited_df = st.data_editor(df_actifs, num_rows="fixed", use_container_width=True, key="edit_act")
-        
-        col_s, col_d = st.columns(2)
-        with col_s:
-            if st.button("💾 Sauvegarder modifs"):
-                save_data(pd.concat([df_anciens, edited_df], ignore_index=True))
-                st.success("Sauvegardé.")
+        edited = st.data_editor(df_actifs, num_rows="fixed", use_container_width=True, key="edit")
+        c_save, c_dep = st.columns(2)
+        with c_save:
+            if st.button("💾 Sauvegarder modifications"):
+                save_data(pd.concat([df_anciens, edited], ignore_index=True))
+                # LOG
+                log_action(current_user, "Modification", "Mise à jour du tableau des actifs")
+                st.success("Sauvegardé")
                 st.rerun()
-        with col_d:
-            with st.popover("Départ Employé"):
+        with c_dep:
+            with st.popover("Départ"):
                 who = st.selectbox("Nom", df_actifs['Nom']+" "+df_actifs['Prénom'])
-                d_date = st.date_input("Date Fin")
+                d_date = st.date_input("Date")
                 if st.button("Valider Départ"):
                     mask = (df['Nom']+" "+df['Prénom']) == who
                     df.loc[mask, 'Etat'] = 'Parti'
                     df.loc[mask, 'Date Sortie'] = str(d_date)
                     save_data(df)
+                    # LOG
+                    log_action(current_user, "Départ", f"{who} marqué comme parti le {d_date}")
                     st.rerun()
-    else: st.info("Vide")
 
-# TAB 3
+# TAB 3 : ARCHIVES
 with tab3:
     if not df_anciens.empty:
-        st.dataframe(df_anciens, use_container_width=True)
-        # Export
-        buffer = BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer: df_anciens.to_excel(writer, index=False)
-        st.download_button("Télécharger Excel", buffer, "anciens.xlsx")
-        
-        st.markdown("---")
+        st.dataframe(df_anciens)
         c_res, c_del = st.columns(2)
         opts = df_anciens['Nom']+" "+df_anciens['Prénom']
         
         with c_res:
-            res_who = st.selectbox("Réintégrer", opts, key="res")
+            who_res = st.selectbox("Réintégrer", opts)
             if st.button("Valider Réintégration"):
-                mask = (df['Nom']+" "+df['Prénom']) == res_who
+                mask = (df['Nom']+" "+df['Prénom']) == who_res
                 df.loc[mask, 'Etat'] = 'Actif'
                 df.loc[mask, 'Date Sortie'] = ""
                 save_data(df)
+                # LOG
+                log_action(current_user, "Réintégration", f"Retour de {who_res}")
                 st.rerun()
+                
         with c_del:
-            del_who = st.selectbox("Supprimer", opts, key="del")
-            if st.button("Valider Suppression", type="primary"):
-                mask = (df['Nom']+" "+df['Prénom']) == del_who
+            who_del = st.selectbox("Supprimer", opts)
+            if st.button("Suppression Totale", type="primary"):
+                mask = (df['Nom']+" "+df['Prénom']) == who_del
                 save_data(df[~mask])
+                # LOG
+                log_action(current_user, "Suppression", f"Effacement définitif de {who_del}")
                 st.rerun()
-    else: st.info("Aucun ancien")
+
+# TAB 4 : JOURNAL DES LOGS (NOUVEAU)
+with tab4:
+    st.header("📜 Historique des actions")
+    
+    if st.button("🔄 Rafraîchir les logs"):
+        st.rerun()
+        
+    try:
+        # On lit l'onglet 'Logs'
+        df_logs = conn.read(worksheet="Logs", ttl=0)
+        if not df_logs.empty:
+            # On trie pour avoir le plus récent en haut (optionnel)
+            st.dataframe(df_logs, use_container_width=True)
+            
+            # Export des logs
+            buffer_log = BytesIO()
+            with pd.ExcelWriter(buffer_log, engine='xlsxwriter') as writer:
+                df_logs.to_excel(writer, index=False)
+            st.download_button("Télécharger le Journal", buffer_log, "journal_logs.xlsx")
+        else:
+            st.info("Le journal est vide pour l'instant.")
+    except Exception as e:
+        st.error("Impossible de lire l'onglet 'Logs'. Avez-vous bien créé l'onglet dans Google Sheets ?")
 
 
 
