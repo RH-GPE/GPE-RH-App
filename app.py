@@ -8,30 +8,31 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Registre GPE (Cloud)", layout="wide")
 
 # --- CONNEXION GOOGLE SHEETS ---
-# On établit la connexion
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     """Charge les données depuis Google Sheets."""
-    # Le TTL (Time To Live) à 0 force le rechargement frais à chaque fois
     try:
+        # On charge les données (ttl=0 pour ne pas avoir de cache et voir les maj direct)
         df = conn.read(worksheet="Sheet1", ttl=0)
-        # Nettoyage si le fichier est vide ou mal formaté
+        
         expected_cols = [
             "Nom", "Prénom", "Poste", "Naissance", "Téléphone", 
             "Date Embauche", "Statut", "Salaire", "Contrat", "Etat", "Date Sortie"
         ]
         
-        # Si le sheet est vide, on renvoie un DF vide avec les bonnes colonnes
         if df.empty:
              return pd.DataFrame(columns=expected_cols)
         
-        # On s'assure que toutes les colonnes existent
+        # S'assurer que toutes les colonnes existent
         for col in expected_cols:
             if col not in df.columns:
                 df[col] = None
-                
-        return df[expected_cols] # On force l'ordre des colonnes
+        
+        # Nettoyage des valeurs NaN (vides)
+        df = df.fillna("")
+        
+        return df[expected_cols]
         
     except Exception as e:
         st.error(f"Erreur de connexion Google Sheets : {e}")
@@ -41,7 +42,7 @@ def save_data(df):
     """Sauvegarde tout le DataFrame dans Google Sheets."""
     try:
         conn.update(worksheet="Sheet1", data=df)
-        st.cache_data.clear() # On vide le cache pour forcer la mise à jour visuelle
+        st.cache_data.clear()
     except Exception as e:
         st.error(f"Erreur lors de la sauvegarde : {e}")
 
@@ -52,10 +53,8 @@ st.markdown("---")
 # Chargement
 df = load_data()
 
-# Séparation Actifs / Anciens
+# Séparation des tables pour l'affichage
 if not df.empty:
-    # Remplissage des valeurs nulles pour éviter les bugs
-    df = df.fillna("")
     df_actifs = df[df['Etat'] != 'Parti'].copy()
     df_anciens = df[df['Etat'] == 'Parti'].copy()
 else:
@@ -63,7 +62,7 @@ else:
     df_anciens = pd.DataFrame()
 
 # TABS
-tab_add, tab_active, tab_archived = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives"])
+tab_add, tab_active, tab_archived = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives & Actions"])
 
 # --- TAB 1 : RECRUTEMENT ---
 with tab_add:
@@ -81,7 +80,6 @@ with tab_add:
             statut = st.radio("Statut", ["Non-cadre", "Cadre"], horizontal=True)
             salaire = st.number_input("Salaire", step=100.0)
         
-        # Checkbox simple pour le contrat
         contrat_recu = st.checkbox("Contrat papier/PDF bien reçu et archivé")
         
         if st.form_submit_button("Valider"):
@@ -100,7 +98,6 @@ with tab_add:
                     "Date Sortie": ""
                 }])
                 
-                # Ajout et sauvegarde
                 updated_df = pd.concat([df, new_entry], ignore_index=True)
                 save_data(updated_df)
                 st.success("Employé ajouté sur Google Sheets !")
@@ -111,29 +108,31 @@ with tab_add:
 # --- TAB 2 : ACTIFS ---
 with tab_active:
     if not df_actifs.empty:
-        # Éditeur
+        st.caption("Double-cliquez sur une case pour modifier, puis cliquez sur Sauvegarder.")
         edited_df = st.data_editor(df_actifs, num_rows="fixed", use_container_width=True, key="editor_actifs")
         
         col_save, col_dep = st.columns([1, 1])
         
-        # Bouton Sauvegarder les modifications
+        # Sauvegarde modifs
         with col_save:
-            if st.button("💾 Sauvegarder modifs"):
-                # On met à jour le DF principal
-                # Technique : On supprime les anciens actifs du DF principal et on remet les nouveaux
-                df_restant = df[df['Etat'] == 'Parti']
-                df_final = pd.concat([df_restant, edited_df], ignore_index=True)
+            if st.button("💾 Sauvegarder les modifications"):
+                # On combine les anciens intacts + les actifs modifiés
+                df_final = pd.concat([df_anciens, edited_df], ignore_index=True)
                 save_data(df_final)
-                st.success("Google Sheets mis à jour !")
+                st.success("Mise à jour effectuée !")
                 st.rerun()
 
         # Gestion Départ
         with col_dep:
             with st.popover("🚪 Signaler un départ"):
-                choix_depart = st.selectbox("Qui part ?", df_actifs['Nom'] + " " + df_actifs['Prénom'])
+                st.write("**Archiver un employé**")
+                # Création d'une liste unique pour le selectbox
+                liste_actifs = df_actifs['Nom'] + " " + df_actifs['Prénom']
+                choix_depart = st.selectbox("Qui part ?", liste_actifs)
                 date_depart = st.date_input("Date de fin")
+                
                 if st.button("Valider le départ"):
-                    # On retrouve la ligne dans le DF principal
+                    # On cherche la ligne correspondante dans le DF global
                     mask = (df['Nom'] + " " + df['Prénom']) == choix_depart
                     df.loc[mask, 'Etat'] = 'Parti'
                     df.loc[mask, 'Date Sortie'] = str(date_depart)
@@ -141,16 +140,62 @@ with tab_active:
                     st.success("Départ enregistré.")
                     st.rerun()
     else:
-        st.info("La base est vide.")
+        st.info("La base est vide ou aucun actif.")
 
-# --- TAB 3 : ARCHIVES ---
+# --- TAB 3 : ARCHIVES (MODIFIÉ) ---
 with tab_archived:
+    st.header("Gestion des Anciens Employés")
+    
     if not df_anciens.empty:
-        st.dataframe(df_anciens)
-        # Bouton export Excel
+        # Affichage du tableau
+        st.dataframe(df_anciens, use_container_width=True)
+        
+        # Export Excel
         buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df_anciens.to_excel(writer, index=False)
-        st.download_button("Télécharger Excel", buffer, "anciens.xlsx")
+        st.download_button("📥 Télécharger la liste (Excel)", buffer, "anciens_employes.xlsx")
+        
+        st.markdown("---")
+        st.subheader("Actions sur les archives")
+        
+        col_reintegre, col_delete = st.columns(2)
+        
+        # Liste des noms archivés pour les menus déroulants
+        options_anciens = df_anciens['Nom'] + " " + df_anciens['Prénom']
+        
+        # 1. RÉINTÉGRATION
+        with col_reintegre:
+            st.info("↩️ **Réintégration**")
+            st.caption("L'employé repassera dans la liste 'Actif'.")
+            
+            choix_restore = st.selectbox("Choisir l'employé à réintégrer :", options_anciens, key="restore_select")
+            
+            if st.button("Réintégrer dans les effectifs"):
+                # On identifie la personne dans le tableau GLOBAL
+                mask = (df['Nom'] + " " + df['Prénom']) == choix_restore
+                df.loc[mask, 'Etat'] = 'Actif'
+                df.loc[mask, 'Date Sortie'] = "" # On efface la date de sortie
+                
+                save_data(df)
+                st.success(f"{choix_restore} est de nouveau actif !")
+                st.rerun()
+
+        # 2. SUPPRESSION DÉFINITIVE
+        with col_delete:
+            st.error("🗑️ **Suppression Définitive**")
+            st.caption("⚠️ Attention : Efface définitivement la ligne du Google Sheet.")
+            
+            choix_delete = st.selectbox("Choisir l'employé à supprimer :", options_anciens, key="delete_select")
+            
+            if st.button("Supprimer définitivement", type="primary"):
+                # On garde tout le monde SAUF la personne sélectionnée
+                mask = (df['Nom'] + " " + df['Prénom']) == choix_delete
+                df_new = df[~mask] # Le tilde ~ signifie "l'inverse de"
+                
+                save_data(df_new)
+                st.warning(f"{choix_delete} a été supprimé de la base.")
+                st.rerun()
+
     else:
-        st.write("Aucun ancien employé.")
+        st.write("Aucun ancien employé pour le moment.")
