@@ -47,7 +47,7 @@ def save_data(df):
         st.error(f"Erreur lors de la sauvegarde : {e}")
 
 # --- INTERFACE ---
-st.title("☁️ GPE - Registre - RH)")
+st.title("☁️ GPE - Registre - RH")
 st.markdown("---")
 
 # Chargement
@@ -199,5 +199,6 @@ with tab_archived:
 
     else:
         st.write("Aucun ancien employé pour le moment.")
+
 
 
