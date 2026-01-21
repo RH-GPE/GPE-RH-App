@@ -62,7 +62,7 @@ else:
     df_anciens = pd.DataFrame()
 
 # TABS
-tab_add, tab_active, tab_archived = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives & Actions"])
+tab_add, tab_active, tab_archived = st.tabs(["➕ Recrutement", "👥 Effectifs Actifs", "🗂️ Archives & Actions"])
 
 # --- TAB 1 : RECRUTEMENT ---
 with tab_add:
@@ -199,6 +199,7 @@ with tab_archived:
 
     else:
         st.write("Aucun ancien employé pour le moment.")
+
 
 
 
