@@ -5,7 +5,7 @@ from io import BytesIO
 from streamlit_gsheets import GSheetsConnection
 
 # Configuration de la page
-st.set_page_config(page_title="Registre RH GPE)", layout="wide")
+st.set_page_config(page_title="Registre RH GPE", layout="wide")
 
 # --- CONNEXION GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -47,7 +47,7 @@ def save_data(df):
         st.error(f"Erreur lors de la sauvegarde : {e}")
 
 # --- INTERFACE ---
-st.title("☁️ GPE - RH (Connecté Google Sheets)")
+st.title("☁️ GPE - Registre - RH)")
 st.markdown("---")
 
 # Chargement
@@ -199,4 +199,5 @@ with tab_archived:
 
     else:
         st.write("Aucun ancien employé pour le moment.")
+
 
