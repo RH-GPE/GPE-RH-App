@@ -6,62 +6,66 @@ from streamlit_gsheets import GSheetsConnection
 import time
 
 # Configuration de la page
-st.set_page_config(page_title="Registre - RH - GPE ", layout="wide")
+st.set_page_config(page_title="Registre - GPE - RH", layout="wide")
 
-# --- GESTION DE LA CONNEXION (LOGIN) ---
+# --- GESTION DE LA CONNEXION (MULTI-UTILISATEURS) ---
 def check_password():
-    """Retourne True si l'utilisateur est connecté."""
+    """Gère la connexion avec plusieurs utilisateurs."""
     
-    # 1. Initialisation de l'état si non existant
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
+        st.session_state.username = "" # Pour savoir QUI est connecté
 
-    # 2. Si déjà connecté, on passe
     if st.session_state.authenticated:
         return True
 
-    # 3. Écran de connexion
-    st.title("🔒 Connexion Sécurisée GPE")
+    # Écran de connexion
+    st.title("🔒 Connexion GPE")
+    st.caption("Accès réservé au personnel autorisé.")
     
-    col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
-    with col_login2:
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
         username_input = st.text_input("Identifiant")
         password_input = st.text_input("Mot de passe", type="password")
         
         if st.button("Se connecter", type="primary"):
-            # Vérification via les Secrets
             try:
-                # On récupère les vrais identifiants dans les secrets
-                secret_user = st.secrets["credentials"]["username"]
-                secret_pass = st.secrets["credentials"]["password"]
+                # On charge la liste des utilisateurs depuis les Secrets
+                # secrets["credentials"] est maintenant un dictionnaire {user: password, user2: pass2}
+                users_db = st.secrets["credentials"]
                 
-                if username_input == secret_user and password_input == secret_pass:
-                    st.session_state.authenticated = True
-                    st.success("Connexion réussie !")
-                    time.sleep(1) # Petit délai pour voir le message vert
-                    st.rerun()    # Recharge la page pour afficher l'app
+                # 1. On vérifie si l'utilisateur existe dans la liste
+                if username_input in users_db:
+                    # 2. On vérifie si le mot de passe correspond
+                    if users_db[username_input] == password_input:
+                        st.session_state.authenticated = True
+                        st.session_state.username = username_input # On mémorise le nom
+                        st.success(f"Bienvenue, {username_input} !")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Mot de passe incorrect.")
                 else:
-                    st.error("Identifiant ou mot de passe incorrect.")
-            except Exception:
-                st.error("Erreur : Avez-vous configuré [credentials] dans les Secrets ?")
+                    st.error("Identifiant inconnu.")
+                    
+            except Exception as e:
+                st.error("Erreur de configuration des Secrets. Vérifiez la section [credentials].")
                 
     return False
 
-# --- BLOCAGE DE L'APPLICATION ---
-# Si le mot de passe n'est pas bon, on arrête tout ici.
+# --- SÉCURITÉ : STOP SI PAS CONNECTÉ ---
 if not check_password():
     st.stop()
 
 
 # =========================================================
-# TOUT LE CODE CI-DESSOUS NE S'EXÉCUTE QUE SI CONNECTÉ
+# APPLICATION PRINCIPALE (Visible uniquement après login)
 # =========================================================
 
 # --- CONNEXION GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    """Charge les données depuis Google Sheets."""
     try:
         df = conn.read(worksheet="Sheet1", ttl=0)
         expected_cols = [
@@ -69,37 +73,35 @@ def load_data():
             "Date Embauche", "Statut", "Salaire", "Contrat", "Etat", "Date Sortie"
         ]
         
-        if df.empty:
-             return pd.DataFrame(columns=expected_cols)
+        if df.empty: return pd.DataFrame(columns=expected_cols)
         
         for col in expected_cols:
-            if col not in df.columns:
-                df[col] = None
+            if col not in df.columns: df[col] = None
         
-        df = df.fillna("")
-        return df[expected_cols]
-        
+        return df.fillna("")[expected_cols]
     except Exception as e:
-        st.error(f"Erreur de connexion Google Sheets : {e}")
+        st.error(f"Erreur Google Sheets : {e}")
         return pd.DataFrame()
 
 def save_data(df):
-    """Sauvegarde tout le DataFrame dans Google Sheets."""
     try:
         conn.update(worksheet="Sheet1", data=df)
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Erreur lors de la sauvegarde : {e}")
+        st.error(f"Erreur sauvegarde : {e}")
 
-# --- MENU LATÉRAL DE DÉCONNEXION ---
+# --- BARRE LATÉRALE ---
 with st.sidebar:
-    st.write(f"Connecté en tant que : **{st.secrets['credentials']['username']}**")
+    # Affiche le nom de la personne connectée
+    st.info(f"👤 Utilisateur : **{st.session_state.username.capitalize()}**")
+    
     if st.button("Se déconnecter"):
         st.session_state.authenticated = False
+        st.session_state.username = ""
         st.rerun()
 
-# --- INTERFACE PRINCIPALE ---
-st.title("☁️ GPE - RH (Admin)")
+# --- CONTENU ---
+st.title(f"☁️ GPE - Espace RH")
 st.markdown("---")
 
 df = load_data()
@@ -108,15 +110,14 @@ if not df.empty:
     df_actifs = df[df['Etat'] != 'Parti'].copy()
     df_anciens = df[df['Etat'] == 'Parti'].copy()
 else:
-    df_actifs = pd.DataFrame()
-    df_anciens = pd.DataFrame()
+    df_actifs, df_anciens = pd.DataFrame(), pd.DataFrame()
 
-tab_add, tab_active, tab_archived = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives & Actions"])
+tab1, tab2, tab3 = st.tabs(["➕ Recrutement", "👥 Effectif Actif", "🗂️ Archives"])
 
-# --- TAB 1 : RECRUTEMENT ---
-with tab_add:
+# TAB 1
+with tab1:
     st.header("Nouvelle Embauche")
-    with st.form("form_embauche", clear_on_submit=True):
+    with st.form("add_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
             nom = st.text_input("Nom")
@@ -128,98 +129,73 @@ with tab_add:
             embauche = st.date_input("Date Embauche")
             statut = st.radio("Statut", ["Non-cadre", "Cadre"], horizontal=True)
             salaire = st.number_input("Salaire", step=100.0)
-        
-        contrat_recu = st.checkbox("Contrat papier/PDF bien reçu et archivé")
+        contrat_recu = st.checkbox("Contrat signé et archivé")
         
         if st.form_submit_button("Valider"):
             if nom and prenom:
                 new_entry = pd.DataFrame([{
-                    "Nom": nom.upper(),
-                    "Prénom": prenom.capitalize(),
-                    "Poste": poste.capitalize(),
-                    "Naissance": str(naissance),
-                    "Téléphone": str(tel),
-                    "Date Embauche": str(embauche),
-                    "Statut": statut,
-                    "Salaire": salaire,
-                    "Contrat": "Oui" if contrat_recu else "Non",
-                    "Etat": "Actif",
-                    "Date Sortie": ""
+                    "Nom": nom.upper(), "Prénom": prenom.capitalize(), "Poste": poste.capitalize(),
+                    "Naissance": str(naissance), "Téléphone": str(tel), "Date Embauche": str(embauche),
+                    "Statut": statut, "Salaire": salaire, "Contrat": "Oui" if contrat_recu else "Non",
+                    "Etat": "Actif", "Date Sortie": ""
                 }])
-                updated_df = pd.concat([df, new_entry], ignore_index=True)
-                save_data(updated_df)
-                st.success("Employé ajouté sur Google Sheets !")
+                save_data(pd.concat([df, new_entry], ignore_index=True))
+                st.success("Ajouté !")
                 st.rerun()
             else:
-                st.warning("Nom et Prénom obligatoires.")
+                st.warning("Nom/Prénom requis.")
 
-# --- TAB 2 : ACTIFS ---
-with tab_active:
+# TAB 2
+with tab2:
     if not df_actifs.empty:
-        st.caption("Modification en direct :")
-        edited_df = st.data_editor(df_actifs, num_rows="fixed", use_container_width=True, key="editor_actifs")
+        edited_df = st.data_editor(df_actifs, num_rows="fixed", use_container_width=True, key="edit_act")
         
-        col_save, col_dep = st.columns([1, 1])
-        with col_save:
-            if st.button("💾 Sauvegarder les modifications"):
-                df_final = pd.concat([df_anciens, edited_df], ignore_index=True)
-                save_data(df_final)
-                st.success("Mise à jour effectuée !")
+        col_s, col_d = st.columns(2)
+        with col_s:
+            if st.button("💾 Sauvegarder modifs"):
+                save_data(pd.concat([df_anciens, edited_df], ignore_index=True))
+                st.success("Sauvegardé.")
                 st.rerun()
-
-        with col_dep:
-            with st.popover("🚪 Signaler un départ"):
-                liste_actifs = df_actifs['Nom'] + " " + df_actifs['Prénom']
-                choix_depart = st.selectbox("Qui part ?", liste_actifs)
-                date_depart = st.date_input("Date de fin")
-                if st.button("Valider le départ"):
-                    mask = (df['Nom'] + " " + df['Prénom']) == choix_depart
+        with col_d:
+            with st.popover("Départ Employé"):
+                who = st.selectbox("Nom", df_actifs['Nom']+" "+df_actifs['Prénom'])
+                d_date = st.date_input("Date Fin")
+                if st.button("Valider Départ"):
+                    mask = (df['Nom']+" "+df['Prénom']) == who
                     df.loc[mask, 'Etat'] = 'Parti'
-                    df.loc[mask, 'Date Sortie'] = str(date_depart)
+                    df.loc[mask, 'Date Sortie'] = str(d_date)
                     save_data(df)
-                    st.success("Départ enregistré.")
                     st.rerun()
-    else:
-        st.info("La base est vide.")
+    else: st.info("Vide")
 
-# --- TAB 3 : ARCHIVES ---
-with tab_archived:
-    st.header("Gestion des Anciens")
+# TAB 3
+with tab3:
     if not df_anciens.empty:
         st.dataframe(df_anciens, use_container_width=True)
-        
+        # Export
         buffer = BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_anciens.to_excel(writer, index=False)
-        st.download_button("📥 Excel Archives", buffer, "anciens.xlsx")
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer: df_anciens.to_excel(writer, index=False)
+        st.download_button("Télécharger Excel", buffer, "anciens.xlsx")
         
         st.markdown("---")
-        c_rest, c_del = st.columns(2)
+        c_res, c_del = st.columns(2)
+        opts = df_anciens['Nom']+" "+df_anciens['Prénom']
         
-        options_anciens = df_anciens['Nom'] + " " + df_anciens['Prénom']
-        
-        with c_rest:
-            st.info("Réintégration")
-            choix_restore = st.selectbox("Qui réintégrer ?", options_anciens, key="rest")
-            if st.button("Réintégrer"):
-                mask = (df['Nom'] + " " + df['Prénom']) == choix_restore
+        with c_res:
+            res_who = st.selectbox("Réintégrer", opts, key="res")
+            if st.button("Valider Réintégration"):
+                mask = (df['Nom']+" "+df['Prénom']) == res_who
                 df.loc[mask, 'Etat'] = 'Actif'
                 df.loc[mask, 'Date Sortie'] = ""
                 save_data(df)
-                st.success("Fait !")
                 st.rerun()
-                
         with c_del:
-            st.error("Suppression")
-            choix_delete = st.selectbox("Qui supprimer ?", options_anciens, key="del")
-            if st.button("Supprimer définitivement", type="primary"):
-                mask = (df['Nom'] + " " + df['Prénom']) == choix_delete
-                df_new = df[~mask]
-                save_data(df_new)
-                st.warning("Supprimé !")
+            del_who = st.selectbox("Supprimer", opts, key="del")
+            if st.button("Valider Suppression", type="primary"):
+                mask = (df['Nom']+" "+df['Prénom']) == del_who
+                save_data(df[~mask])
                 st.rerun()
-    else:
-        st.write("Personne.")
+    else: st.info("Aucun ancien")
 
 
 
