@@ -5,7 +5,7 @@ from io import BytesIO
 from streamlit_gsheets import GSheetsConnection
 
 # Configuration de la page
-st.set_page_config(page_title="Registre GPE (Cloud)", layout="wide")
+st.set_page_config(page_title="Registre RH GPE)", layout="wide")
 
 # --- CONNEXION GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -199,3 +199,4 @@ with tab_archived:
 
     else:
         st.write("Aucun ancien employé pour le moment.")
+
